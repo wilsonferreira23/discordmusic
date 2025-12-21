@@ -150,29 +150,40 @@ async def play_song(ctx, url):
             return
 
     try:
-        # Extração de info SEM DOWNLOAD (roda em thread separada para não travar o bot)
         loop = asyncio.get_event_loop()
+        # Adiciona 'extract_flat': False para garantir que pegamos os formatos
         data = await loop.run_in_executor(None, lambda: youtube_dl.YoutubeDL(ydl_opts).extract_info(url, download=False))
 
         if 'entries' in data:
             data = data['entries'][0]
 
-        # URL real do stream de áudio
         stream_url = data['url']
         title = data.get('title', 'Desconhecido')
         
-        # Formata duração
+        # --- CORREÇÃO DO ERRO 403 ---
+        # Extrai os headers que o yt-dlp usou e passa para o ffmpeg
+        # Isso faz o YouTube achar que o ffmpeg é um navegador legítimo
+        http_headers = data.get('http_headers', {})
+        header_args = ""
+        for key, value in http_headers.items():
+            header_args += f"{key}: {value}\r\n"
+        
+        # Injeta os headers nas opções do ffmpeg
+        current_ffmpeg_opts = ffmpeg_opts.copy()
+        # Adiciona o user-agent e headers na reconexão
+        current_ffmpeg_opts['before_options'] += f" -headers \"{header_args}\""
+
+        # -----------------------------
+
         duration_seconds = data.get('duration', 0)
         minutes, seconds = divmod(int(duration_seconds), 60)
         formatted_duration = f"{minutes:02d}:{seconds:02d}"
 
-        # Cria o player FFMPEG conectado direto na URL
-        source = discord.FFmpegPCMAudio(stream_url, **ffmpeg_opts)
+        # Usa as opções atualizadas com headers
+        source = discord.FFmpegPCMAudio(stream_url, **current_ffmpeg_opts)
         
         def _after_play(error):
             if error: logger.error(f"Erro no player: {error}")
-            # A checagem de fila é feita pelo loop externo check_queue, 
-            # então não chamamos play_next aqui para não duplicar
 
         if voice_client.is_playing():
             voice_client.stop()
