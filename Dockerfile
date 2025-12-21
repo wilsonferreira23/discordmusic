@@ -1,19 +1,17 @@
-# Usa uma imagem leve do Python
 FROM python:3.10-slim
 
-# Instala o FFmpeg e dependências de sistema (O PULO DO GATO ESTÁ AQUI)
+# Instala git além do ffmpeg (necessário para baixar o yt-dlp do github)
 RUN apt-get update && \
-    apt-get install -y ffmpeg libopus-dev && \
+    apt-get install -y ffmpeg libopus-dev git && \
     rm -rf /var/lib/apt/lists/*
 
-# Configura a pasta de trabalho
 WORKDIR /app
 
-# Copia os arquivos do projeto
 COPY . .
 
-# Instala as dependências do Python
+# Instala dependências
+# ATENÇÃO: Instalamos o yt-dlp direto do git para ter as correções de anti-bot mais recentes
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --force-reinstall https://github.com/yt-dlp/yt-dlp/archive/master.zip
 
-# Comando para iniciar o bot
 CMD ["python", "main.py"]
