@@ -72,12 +72,18 @@ async def play_song(ctx, query):
     try:
         # 1. Baixa o arquivo
         loop = asyncio.get_event_loop()
+        # extract_info baixa o arquivo
         data = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(ydl_opts).extract_info(query, download=True))
         
         if 'entries' in data: data = data['entries'][0]
-        filename = ydl_opts['outtmpl'] % {'id': data['id'], 'ext': data['ext']}
         
-        # Garante que acha o arquivo mesmo se a extensão mudar
+        # --- CORREÇÃO DO ERRO 'DICT AND DICT' ---
+        # Em vez de tentar usar ydl_opts['outtmpl'], montamos o nome manualmente
+        # Isso evita o conflito de tipos
+        filename = f"{data['id']}.{data['ext']}"
+        
+        # Fallback: Se o yt-dlp salvou com outro nome (ex: mkv em vez de webm),
+        # procuramos o arquivo na pasta que começa com o ID do vídeo.
         if not os.path.exists(filename):
             for f in os.listdir('.'):
                 if f.startswith(data['id']):
@@ -88,12 +94,13 @@ async def play_song(ctx, query):
         source = discord.FFmpegPCMAudio(filename)
         
         def after_play(e):
-            if e: logger.error(f"Erro: {e}")
+            if e: logger.error(f"Erro no after_play: {e}")
             # 3. Apaga e chama a próxima
             try:
-                os.remove(filename)
-            except:
-                pass
+                if os.path.exists(filename):
+                    os.remove(filename)
+            except Exception as x:
+                logger.error(f"Erro ao apagar arquivo: {x}")
             check_queue(ctx)
 
         if voice_client.is_playing(): voice_client.stop()
@@ -105,8 +112,8 @@ async def play_song(ctx, query):
         await ctx.send(f"▶️ Tocando: **{data.get('title')}**", view=view)
 
     except Exception as e:
-        logger.error(f"Erro: {e}")
-        await ctx.send("❌ Erro ao processar música.")
+        logger.error(f"Erro Crítico: {e}")
+        await ctx.send(f"❌ Erro ao tocar: {e}")
         check_queue(ctx)
 
 # --- COMANDOS ---
