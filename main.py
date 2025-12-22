@@ -206,38 +206,25 @@ async def play(ctx, *, query):
 
     # Spotify Logic
     added_count = 0
-    if "spotify.com" in query and sp:
-        msg = await ctx.send("⏳ Processando Spotify...")
+    if "spotify.com" in query.lower() and sp:
+        msg = await ctx.send("⏳ Processando Spotify")
         try:
-            if "track" in query:
-                t = sp.track(query)
-                q = f"ytsearch:{t['name']} {t['artists'][0]['name']} audio"
-                queues[guild_id].append(q)
-                added_count = 1
-            elif "playlist" in query:
-                results = sp.playlist_tracks(query, limit=50)
-                for item in results['items']:
-                    if item['track']:
-                        t = item['track']
-                        q = f"ytsearch:{t['name']} {t['artists'][0]['name']} audio"
-                        queues[guild_id].append(q)
-                        added_count += 1
+            clean_url = query.split('?')[0]
+            if "track" in clean_url:
+                t = sp.track(clean_url.split("track/")[-1])
+                queues[guild_id].append(f"ytsearch:{t['name']} {t['artists'][0]['name']} audio")
+            elif "playlist" in clean_url:
+                res = sp.playlist_tracks(clean_url.split("playlist/")[-1], limit=100)
+                for i in res['items']:
+                    if i['track']:
+                        queues[guild_id].append(f"ytsearch:{i['track']['name']} {i['track']['artists'][0]['name']} audio")
             await msg.delete()
-        except: pass
+        except: await msg.edit(content="❌ Erro no link Spotify.", delete_after=5)
     else:
-        if "http" not in query: query = f"ytsearch:{query}"
-        queues[guild_id].append(query)
-        added_count = 1
+        queues[guild_id].append(query if "http" in query else f"ytsearch:{query}")
 
-    if not voice_client.is_playing():
-        check_queue(ctx)
-    else:
-        # Se já estiver tocando, a gente tenta pré-carregar essa nova se não tiver nada na fila
-        if len(queues[guild_id]) == 1 and guild_id not in preloads:
-             asyncio.create_task(preload_next_song(guild_id))
-        
-        embed = discord.Embed(description=f"✅ **Adicionado à fila** ({added_count} músicas)", color=0x1DB954)
-        await ctx.send(embed=embed, delete_after=5)
+    if not ctx.voice_client.is_playing(): check_queue(ctx)
+    else: await ctx.send("✅ Adicionado à fila.", delete_after=5)
 
 @bot.event
 async def on_interaction(interaction):
