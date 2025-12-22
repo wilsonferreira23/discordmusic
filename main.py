@@ -24,7 +24,7 @@ if SPOTIFY_CLIENT_ID:
 
 # --- CONFIGURAÇÃO DE DOWNLOAD ---
 ydl_opts = {
-    'format': 'bestaudio/best',
+    'format': 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best',
     'noplaylist': True,
     'outtmpl': '%(id)s.%(ext)s',
     'quiet': True,
