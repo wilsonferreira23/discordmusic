@@ -255,14 +255,38 @@ async def on_interaction(interaction):
         if voice_client.is_playing() or voice_client.is_paused():
             voice_client.stop()
     elif custom_id == "stop":
-        queues[interaction.guild.id] = []
-        preloads.pop(interaction.guild.id, None) # Limpa preloads
+        guild_id = interaction.guild.id
+        
+        # 1. Limpa a fila de links
+        queues[guild_id] = []
+        
+        # 2. LIMPA A GAVETA DE PRÉ-DOWNLOAD (Isso corrige o bug)
+        if guild_id in preloads:
+            # Tenta apagar o arquivo físico que estava baixado para não sobrar lixo
+            data_to_clean = preloads[guild_id]
+            try:
+                filename = data_to_clean.get('filename')
+                if filename and os.path.exists(filename):
+                    os.remove(filename)
+            except:
+                pass
+            # Remove a entrada do dicionário
+            del preloads[guild_id]
+        
+        # 3. Para a música atual e desconecta
         voice_client.stop()
         await voice_client.disconnect()
-        state = get_state(interaction.guild.id)
+        
+        # 4. Limpa a interface visual
+        state = get_state(guild_id)
         if state['last_msg']:
-            try: await state['last_msg'].delete()
-            except: pass
+            try:
+                await state['last_msg'].delete()
+                state['last_msg'] = None
+            except:
+                pass
+        
+        await interaction.response.send_message("⏹️ **Fila limpa e bot desconectado.**", ephemeral=True)
 
 @bot.event
 async def on_ready():
