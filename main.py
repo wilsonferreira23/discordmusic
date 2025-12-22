@@ -34,12 +34,6 @@ ydl_opts = {
     'concurrent_fragment_downloads': 5, 
 }
 
-# CONFIGURAÇÃO FFMPEG PARA STEREO E ALTA QUALIDADE
-ffmpeg_options = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -nostdin',
-    'options': '-vn -ac 2 -b:a 192k' 
-}
-
 # --- ESTADOS GLOBAIS ---
 queues = {} 
 server_states = {} 
@@ -170,7 +164,7 @@ async def play_song_file(ctx, data):
     
     # Toca
     try:
-        source = discord.FFmpegPCMAudio(filename, **ffmpeg_options)
+        source = discord.FFmpegPCMAudio(filename)
         
         def after_play(e):
             # Apaga o arquivo atual
