@@ -1,108 +1,184 @@
 import discord
 from discord.ext import commands
-import yt_dlp as youtube_dl
+import yt_dlp
 import asyncio
 import os
 import logging
+from discord.ui import Button, View
+import spotipy
+from spotipy.oauth2 import SpotifyClientCredentials
 
-# --- LOGGING ---
+# --- CONFIGURAÇÃO BÁSICA ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('music_bot')
 
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
+SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
+SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 
-# --- CONFIGURAÇÃO YT-DLP (ANTI-BLOQUEIO) ---
+# Configuração Spotify
+sp = None
+if SPOTIFY_CLIENT_ID:
+    try:
+        sp = spotipy.Spotify(auth_manager=SpotifyClientCredentials(client_id=SPOTIFY_CLIENT_ID, client_secret=SPOTIFY_CLIENT_SECRET))
+    except Exception as e:
+        logger.error(f"Erro ao configurar Spotify: {e}")
+
+# --- CONFIGURAÇÃO PARA BAIXAR (Evita erro 403) ---
 ydl_opts = {
     'format': 'bestaudio/best',
     'noplaylist': True,
-    'default_search': 'ytsearch',
+    'outtmpl': '%(id)s.%(ext)s', 
     'quiet': True,
-    'no_warnings': True,
-    'extract_flat': False,
-    # CRÍTICO: Força IPv4 (YouTube bloqueia IPv6 do Railway)
-    'force_ipv4': True,
-    'source_address': '0.0.0.0',
-    'cookiefile': 'cookies.txt',
-    # User Agent genérico para parecer um PC comum
-    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     'nocheckcertificate': True,
+    'cookiefile': 'cookies.txt', 
 }
 
-# --- CONFIGURAÇÃO FFMPEG ---
-# Adicionei user_agent aqui também para garantir
-ffmpeg_options = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -nostdin',
-    'options': '-vn'
-}
-
+queues = {}
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-@bot.event
-async def on_ready():
-    logger.info(f'Bot Online como {bot.user}')
+# --- BOTÕES (AGORA COM PAUSE) ---
+def create_controls():
+    view = View(timeout=None)
+    
+    # Botão Pause/Resume
+    pause_btn = Button(style=discord.ButtonStyle.secondary, emoji="⏯️", custom_id="pause")
+    # Botão Skip
+    skip_btn = Button(style=discord.ButtonStyle.primary, emoji="⏭️", custom_id="skip")
+    # Botão Stop
+    stop_btn = Button(style=discord.ButtonStyle.danger, emoji="⏹️", custom_id="stop")
+    
+    view.add_item(pause_btn)
+    view.add_item(skip_btn)
+    view.add_item(stop_btn)
+    return view
 
-async def play_song(ctx, url):
-    voice_client = discord.utils.get(bot.voice_clients, guild=ctx.guild)
+# --- LÓGICA DE FILA E PLAY ---
+def check_queue(ctx):
+    guild_id = ctx.guild.id
+    if guild_id in queues and queues[guild_id]:
+        query = queues[guild_id].pop(0)
+        asyncio.run_coroutine_threadsafe(play_song(ctx, query), bot.loop)
+    else:
+        # Fila acabou
+        pass
 
+async def play_song(ctx, query):
+    voice_client = ctx.voice_client
+    if not voice_client: return
+
+    try:
+        # 1. Baixa o arquivo
+        loop = asyncio.get_event_loop()
+        data = await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(ydl_opts).extract_info(query, download=True))
+        
+        if 'entries' in data: data = data['entries'][0]
+        filename = ydl_opts['outtmpl'] % {'id': data['id'], 'ext': data['ext']}
+        
+        # Garante que acha o arquivo mesmo se a extensão mudar
+        if not os.path.exists(filename):
+            for f in os.listdir('.'):
+                if f.startswith(data['id']):
+                    filename = f
+                    break
+
+        # 2. Toca
+        source = discord.FFmpegPCMAudio(filename)
+        
+        def after_play(e):
+            if e: logger.error(f"Erro: {e}")
+            # 3. Apaga e chama a próxima
+            try:
+                os.remove(filename)
+            except:
+                pass
+            check_queue(ctx)
+
+        if voice_client.is_playing(): voice_client.stop()
+        
+        voice_client.play(source, after=after_play)
+        
+        # Envia a mensagem com os botões
+        view = create_controls()
+        await ctx.send(f"▶️ Tocando: **{data.get('title')}**", view=view)
+
+    except Exception as e:
+        logger.error(f"Erro: {e}")
+        await ctx.send("❌ Erro ao processar música.")
+        check_queue(ctx)
+
+# --- COMANDOS ---
+@bot.command()
+async def play(ctx, *, query):
+    guild_id = ctx.guild.id
+    if guild_id not in queues: queues[guild_id] = []
+    
+    voice_client = ctx.voice_client
     if not voice_client:
         if ctx.author.voice:
             voice_client = await ctx.author.voice.channel.connect()
         else:
-            await ctx.send("Entre em um canal de voz!")
-            return
+            return await ctx.send("Entre na voz!")
 
-    try:
-        await ctx.send(f"🔎 Buscando: `{url}` ...")
-        
-        loop = asyncio.get_event_loop()
-        # Baixa info sem download
-        data = await loop.run_in_executor(None, lambda: youtube_dl.YoutubeDL(ydl_opts).extract_info(url, download=False))
+    # Lógica Spotify
+    if "spotify.com" in query and sp:
+        await ctx.send("⏳ Processando Spotify...")
+        try:
+            if "track" in query:
+                t = sp.track(query)
+                queues[guild_id].append(f"ytsearch:{t['name']} {t['artists'][0]['name']} audio")
+            elif "playlist" in query:
+                results = sp.playlist_tracks(query, limit=50)
+                for item in results['items']:
+                    if item['track']:
+                        t = item['track']
+                        queues[guild_id].append(f"ytsearch:{t['name']} {t['artists'][0]['name']} audio")
+        except Exception as e:
+            await ctx.send(f"Erro no Spotify: {e}")
+    else:
+        if "http" not in query: query = f"ytsearch:{query}"
+        queues[guild_id].append(query)
 
-        if 'entries' in data:
-            data = data['entries'][0]
+    if not voice_client.is_playing():
+        check_queue(ctx)
+    else:
+        await ctx.send("✅ Adicionado à fila.")
 
-        stream_url = data['url']
-        title = data.get('title', 'Desconhecido')
-        
-        # --- A MÁGICA DO HEADER (SOLUÇÃO DO ERRO 403) ---
-        # Pegamos os headers que o yt-dlp usou e forçamos no ffmpeg
-        http_headers = data.get('http_headers', {})
-        header_args = ""
-        
-        # Constrói a string de headers manualmente
-        for key, value in http_headers.items():
-            header_args += f"{key}: {value}\r\n"
-            
-        # Força o FFmpeg a usar esses headers e o User-Agent correto
-        current_opts = ffmpeg_options.copy()
-        current_opts['before_options'] += f" -headers \"{header_args}\" -user_agent \"{ydl_opts['user_agent']}\""
-        
-        # Cria o player
-        source = discord.FFmpegPCMAudio(stream_url, **current_opts)
-        
-        def after_play(e):
-            if e: logger.error(f"Erro Player: {e}")
+# --- EVENTOS DE BOTÃO ---
+@bot.event
+async def on_interaction(interaction):
+    if interaction.type != discord.InteractionType.component: return
+    
+    custom_id = interaction.data.get('custom_id')
+    voice_client = interaction.guild.voice_client
+    
+    if not voice_client:
+        return await interaction.response.send_message("Não estou conectado.", ephemeral=True)
 
+    if custom_id == "pause":
         if voice_client.is_playing():
-            voice_client.stop()
+            voice_client.pause()
+            await interaction.response.send_message("⏸️ Pausado", ephemeral=True)
+        elif voice_client.is_paused():
+            voice_client.resume()
+            await interaction.response.send_message("▶️ Retomado", ephemeral=True)
             
-        voice_client.play(source, after=after_play)
-        await ctx.send(f"▶️ Tocando: **{title}**")
+    elif custom_id == "skip":
+        if voice_client.is_playing() or voice_client.is_paused():
+            voice_client.stop() # Isso aciona o after_play e vai pra próxima
+            await interaction.response.send_message("⏭️ Pulado", ephemeral=True)
+            
+    elif custom_id == "stop":
+        queues[interaction.guild.id] = [] # Limpa fila
+        voice_client.stop()
+        await voice_client.disconnect()
+        await interaction.response.send_message("⏹️ Parado", ephemeral=True)
 
-    except Exception as e:
-        logger.error(f"Erro Play: {e}")
-        await ctx.send(f"❌ Erro: {e}")
-
-@bot.command()
-async def play(ctx, *, query):
-    if "http" not in query: query = f"ytsearch:{query}"
-    await play_song(ctx, query)
-
-@bot.command()
-async def stop(ctx):
-    if ctx.voice_client: await ctx.voice_client.disconnect()
+@bot.event
+async def on_ready():
+    print(f"Logado como: {bot.user}")
 
 if __name__ == "__main__":
     bot.run(DISCORD_TOKEN)
