@@ -224,7 +224,7 @@ async def play(ctx, *, query):
         queues[guild_id].append(query if "http" in query else f"ytsearch:{query}")
 
     if ctx.voice_client and not ctx.voice_client.is_playing():
-    check_queue(ctx)
+        check_queue(ctx)
     else: await ctx.send("✅ Adicionado à fila.", delete_after=5)
 
 @bot.event
