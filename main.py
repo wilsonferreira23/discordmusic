@@ -50,13 +50,8 @@ else:
 # =========================
 
 def get_ydl_opts():
-    """
-    Opções do yt-dlp.
-    Mantém cookies.txt, mas só usa se o arquivo existir.
-    """
-
     opts = {
-        "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
+        "format": "bestaudio/best",
         "noplaylist": True,
         "outtmpl": "%(id)s.%(ext)s",
         "quiet": False,
@@ -64,14 +59,12 @@ def get_ydl_opts():
         "nocheckcertificate": True,
         "default_search": "ytsearch",
         "source_address": "0.0.0.0",
-
-        # Reduz agressividade para evitar bloqueio/429.
         "concurrent_fragment_downloads": 1,
 
-        # Ajuda em alguns erros de assinatura/challenge do YouTube.
+        # Com cookies, evite android.
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "web"],
+                "player_client": ["web", "web_safari", "web_creator"],
             }
         },
     }
@@ -83,7 +76,6 @@ def get_ydl_opts():
         logger.warning("cookies.txt não encontrado. Rodando sem cookies.")
 
     return opts
-
 
 # =========================
 # ESTADOS
