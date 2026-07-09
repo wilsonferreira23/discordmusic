@@ -61,11 +61,22 @@ def get_ydl_opts():
         "source_address": "0.0.0.0",
         "concurrent_fragment_downloads": 1,
 
-        # Com cookies, evite android.
+        # Com cookies, usa só web.
+        # Remove android e web_creator.
         "extractor_args": {
             "youtube": {
-                "player_client": ["web", "web_safari", "web_creator"],
+                "player_client": ["web"],
             }
+        },
+
+        # Ajuda a parecer uma requisição normal de navegador.
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
         },
     }
 
