@@ -12,7 +12,11 @@ from spotipy.oauth2 import SpotifyClientCredentials
 # CONFIGURAÇÃO GERAL
 # =========================
 
-logging.basicConfig(level=logging.INFO)
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 logger = logging.getLogger("music_bot")
 
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
@@ -39,8 +43,8 @@ if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET:
             )
         )
         logger.info("Spotify conectado com sucesso.")
-    except Exception as e:
-        logger.warning(f"Não foi possível conectar ao Spotify: {e}")
+    except Exception:
+        logger.exception("Não foi possível conectar ao Spotify.")
 else:
     logger.info("Spotify não configurado. Links do Spotify não serão processados.")
 
@@ -50,6 +54,7 @@ else:
 # =========================
 
 def get_ydl_opts():
+    logger.info("Preparando opções do yt-dlp.")
     opts = {
         "format": "bestaudio/best",
         "noplaylist": True,
@@ -100,6 +105,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 def get_state(guild_id: int):
     if guild_id not in server_states:
+        logger.debug("Criando estado do servidor %s.", guild_id)
         server_states[guild_id] = {
             "last_msg": None,
         }
@@ -108,6 +114,7 @@ def get_state(guild_id: int):
 
 def ensure_queue(guild_id: int):
     if guild_id not in queues:
+        logger.debug("Criando fila do servidor %s.", guild_id)
         queues[guild_id] = []
 
 
@@ -151,8 +158,13 @@ async def safe_delete_message(message):
 
     try:
         await message.delete()
+        logger.debug("Mensagem %s removida.", getattr(message, "id", "desconhecida"))
     except Exception:
-        pass
+        logger.debug(
+            "Não foi possível remover a mensagem %s.",
+            getattr(message, "id", "desconhecida"),
+            exc_info=True,
+        )
 
 
 async def update_player_message(ctx, data, new=False):
@@ -193,6 +205,7 @@ async def update_player_message(ctx, data, new=False):
 
     msg = await ctx.send(embed=embed, view=view)
     state["last_msg"] = msg
+    logger.info("Mensagem do player atualizada no servidor %s.", ctx.guild.id)
 
 
 # =========================
@@ -225,6 +238,7 @@ async def download_track(query: str):
     Baixa uma música e retorna os dados com filename.
     """
 
+    logger.info("Iniciando download para: %s", query)
     loop = asyncio.get_running_loop()
 
     def run_download():
@@ -251,10 +265,11 @@ async def download_track(query: str):
             raise RuntimeError("Arquivo de áudio não foi encontrado após o download.")
 
         data["filename"] = filename
+        logger.info("Download concluído: %s", filename)
         return data
 
-    except Exception as e:
-        logger.error(f"Erro no download: {e}")
+    except Exception:
+        logger.exception("Erro no download para: %s", query)
         return None
 
 
@@ -266,6 +281,7 @@ async def preload_next_song(guild_id: int):
     ensure_queue(guild_id)
 
     if guild_id in preloads:
+        logger.debug("Servidor %s já possui pré-download.", guild_id)
         return
 
     if not queues[guild_id]:
@@ -288,6 +304,7 @@ def check_queue(ctx):
     ensure_queue(guild_id)
 
     if guild_id in preloads:
+        logger.info("Usando pré-download no servidor %s.", guild_id)
         data = preloads.pop(guild_id)
 
         if queues[guild_id]:
@@ -298,8 +315,11 @@ def check_queue(ctx):
 
     if queues[guild_id]:
         query = queues[guild_id].pop(0)
+        logger.info("Baixando próxima faixa no servidor %s: %s", guild_id, query)
         asyncio.run_coroutine_threadsafe(play_song_fresh(ctx, query), bot.loop)
         return
+
+    logger.info("Fila encerrada no servidor %s.", guild_id)
 
     state = get_state(guild_id)
 
@@ -312,6 +332,7 @@ def check_queue(ctx):
 
 
 async def play_song_fresh(ctx, query: str):
+    logger.info("Tocando faixa nova no servidor %s: %s", ctx.guild.id, query)
     data = await download_track(query)
 
     if data:
@@ -328,19 +349,22 @@ def cleanup_file(filename: str):
     try:
         if os.path.exists(filename):
             os.remove(filename)
+            logger.info("Arquivo temporário removido: %s", filename)
     except Exception as e:
-        logger.warning(f"Não foi possível apagar arquivo {filename}: {e}")
+        logger.warning("Não foi possível apagar arquivo %s: %s", filename, e)
 
 
 async def play_song_file(ctx, data):
     voice_client = ctx.voice_client
 
     if not voice_client:
+        logger.warning("Sem cliente de voz no servidor %s.", ctx.guild.id)
         return
 
     filename = data.get("filename")
 
     if not filename or not os.path.exists(filename):
+        logger.error("Arquivo de áudio ausente no servidor %s: %s", ctx.guild.id, filename)
         await ctx.send("❌ Arquivo de áudio não encontrado. Pulando...", delete_after=8)
         check_queue(ctx)
         return
@@ -355,7 +379,9 @@ async def play_song_file(ctx, data):
 
         def after_play(error):
             if error:
-                logger.error(f"Erro no player: {error}")
+                logger.error("Erro no player do servidor %s: %s", ctx.guild.id, error)
+            else:
+                logger.info("Reprodução concluída no servidor %s.", ctx.guild.id)
 
             cleanup_file(filename)
             check_queue(ctx)
@@ -364,13 +390,14 @@ async def play_song_file(ctx, data):
             voice_client.stop()
 
         voice_client.play(source, after=after_play)
+        logger.info("Reprodução iniciada no servidor %s: %s", ctx.guild.id, filename)
 
         await update_player_message(ctx, data, new=True)
 
         asyncio.create_task(preload_next_song(ctx.guild.id))
 
-    except Exception as e:
-        logger.error(f"Erro ao tocar arquivo: {e}")
+    except Exception:
+        logger.exception("Erro ao tocar arquivo no servidor %s.", ctx.guild.id)
         cleanup_file(filename)
         check_queue(ctx)
 
@@ -399,6 +426,7 @@ async def add_spotify_to_queue(ctx, query: str):
 
     try:
         clean_url = query.split("?")[0]
+        logger.info("Processando link Spotify no servidor %s: %s", guild_id, clean_url)
 
         if "track" in clean_url:
             track_id = clean_url.split("track/")[-1].split("/")[0]
@@ -406,6 +434,7 @@ async def add_spotify_to_queue(ctx, query: str):
 
             queues[guild_id].append(spotify_track_to_query(track))
             added_count = 1
+            logger.info("Faixa Spotify adicionada no servidor %s.", guild_id)
 
         elif "playlist" in clean_url:
             playlist_id = clean_url.split("playlist/")[-1].split("/")[0]
@@ -433,6 +462,12 @@ async def add_spotify_to_queue(ctx, query: str):
 
                 offset += limit
 
+            logger.info(
+                "Playlist Spotify adicionada no servidor %s: %s faixas.",
+                guild_id,
+                added_count,
+            )
+
         elif "album" in clean_url:
             album_id = clean_url.split("album/")[-1].split("/")[0]
 
@@ -457,6 +492,12 @@ async def add_spotify_to_queue(ctx, query: str):
 
                 offset += limit
 
+            logger.info(
+                "Álbum Spotify adicionado no servidor %s: %s faixas.",
+                guild_id,
+                added_count,
+            )
+
         else:
             await msg.edit(content="❌ Link do Spotify não reconhecido.", delete_after=8)
             return 0
@@ -464,13 +505,13 @@ async def add_spotify_to_queue(ctx, query: str):
         await msg.delete()
         return added_count
 
-    except Exception as e:
-        logger.error(f"Erro no Spotify: {e}")
+    except Exception:
+        logger.exception("Erro ao processar Spotify no servidor %s.", guild_id)
 
         try:
             await msg.edit(content="❌ Erro ao processar link do Spotify.", delete_after=8)
         except Exception:
-            pass
+            logger.debug("Não foi possível atualizar a mensagem de erro do Spotify.", exc_info=True)
 
         return 0
 
@@ -485,9 +526,11 @@ async def play(ctx, *, query: str):
     ensure_queue(guild_id)
 
     voice_client = ctx.voice_client
+    logger.info("Comando play no servidor %s: %s", guild_id, query)
 
     if not voice_client:
         if ctx.author.voice and ctx.author.voice.channel:
+            logger.info("Conectando ao canal de voz no servidor %s.", guild_id)
             voice_client = await ctx.author.voice.channel.connect()
         else:
             return await ctx.send("❌ Entre em um canal de voz primeiro.")
@@ -495,7 +538,7 @@ async def play(ctx, *, query: str):
     try:
         await ctx.message.delete()
     except Exception:
-        pass
+        logger.debug("Não foi possível remover a mensagem do comando play.", exc_info=True)
 
     added_count = 0
 
@@ -505,6 +548,7 @@ async def play(ctx, *, query: str):
         final_query = query if query.startswith("http") else f"ytsearch:{query}"
         queues[guild_id].append(final_query)
         added_count = 1
+        logger.info("Faixa adicionada à fila do servidor %s.", guild_id)
 
     if added_count <= 0:
         return
@@ -526,6 +570,7 @@ async def skip(ctx):
         return await ctx.send("❌ Não estou em um canal de voz.", delete_after=6)
 
     if voice_client.is_playing() or voice_client.is_paused():
+        logger.info("Comando skip no servidor %s.", ctx.guild.id)
         voice_client.stop()
         await ctx.send("⏭️ Música pulada.", delete_after=5)
     else:
@@ -540,9 +585,11 @@ async def pause(ctx):
         return await ctx.send("❌ Não estou em um canal de voz.", delete_after=6)
 
     if voice_client.is_playing():
+        logger.info("Pausando reprodução no servidor %s.", ctx.guild.id)
         voice_client.pause()
         await ctx.send("⏸️ Pausado.", delete_after=5)
     elif voice_client.is_paused():
+        logger.info("Retomando reprodução no servidor %s.", ctx.guild.id)
         voice_client.resume()
         await ctx.send("▶️ Retomado.", delete_after=5)
     else:
@@ -551,6 +598,7 @@ async def pause(ctx):
 
 @bot.command()
 async def stop(ctx):
+    logger.info("Comando stop no servidor %s.", ctx.guild.id)
     await stop_player(ctx.guild, ctx.voice_client)
     await ctx.send("⏹️ Fila limpa e bot desconectado.", delete_after=6)
 
@@ -593,6 +641,7 @@ async def stop_player(guild, voice_client):
     ensure_queue(guild_id)
 
     queues[guild_id] = []
+    logger.info("Limpando player do servidor %s.", guild_id)
 
     if guild_id in preloads:
         data_to_clean = preloads.pop(guild_id)
@@ -603,12 +652,13 @@ async def stop_player(guild, voice_client):
             if voice_client.is_playing() or voice_client.is_paused():
                 voice_client.stop()
         except Exception:
-            pass
+            logger.exception("Erro ao interromper a reprodução no servidor %s.", guild_id)
 
         try:
             await voice_client.disconnect()
+            logger.info("Desconectado do canal de voz no servidor %s.", guild_id)
         except Exception:
-            pass
+            logger.exception("Erro ao desconectar do canal de voz no servidor %s.", guild_id)
 
     state = get_state(guild_id)
 
@@ -624,6 +674,7 @@ async def on_interaction(interaction):
 
     custom_id = interaction.data.get("custom_id")
     voice_client = interaction.guild.voice_client
+    logger.info("Interação %s no servidor %s.", custom_id, interaction.guild.id)
 
     await interaction.response.defer(ephemeral=True)
 
@@ -664,6 +715,24 @@ async def on_interaction(interaction):
 async def on_ready():
     logger.info(f"Aura Music Online: {bot.user}")
     print(f"Aura Music Online: {bot.user}")
+
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return
+
+    original = getattr(error, "original", error)
+    logger.error(
+        "Erro no comando no servidor %s.",
+        getattr(ctx.guild, "id", "DM"),
+        exc_info=(type(original), original, original.__traceback__),
+    )
+
+
+@bot.event
+async def on_error(event, *args, **kwargs):
+    logger.exception("Erro não tratado no evento Discord: %s", event)
 
 
 # =========================
