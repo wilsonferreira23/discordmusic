@@ -433,6 +433,30 @@ async def add_spotify_to_queue(ctx, query: str):
 
                 offset += limit
 
+        elif "album" in clean_url:
+            album_id = clean_url.split("album/")[-1].split("/")[0]
+
+            offset = 0
+            limit = 50
+
+            while True:
+                result = sp.album_tracks(
+                    album_id,
+                    limit=limit,
+                    offset=offset,
+                )
+
+                items = result.get("items") or []
+
+                for track in items:
+                    queues[guild_id].append(spotify_track_to_query(track))
+                    added_count += 1
+
+                if not result.get("next"):
+                    break
+
+                offset += limit
+
         else:
             await msg.edit(content="❌ Link do Spotify não reconhecido.", delete_after=8)
             return 0
