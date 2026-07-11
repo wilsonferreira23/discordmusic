@@ -60,14 +60,10 @@ def get_ydl_opts():
         "default_search": "ytsearch",
         "source_address": "0.0.0.0",
         "concurrent_fragment_downloads": 1,
-
-        # Com cookies, usa só web.
-        # Remove android e web_creator.
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["web"],
-            }
+        "js_runtimes": {
+            "deno": {},
         },
+        "remote_components": {"ejs:github"},
 
         # Ajuda a parecer uma requisição normal de navegador.
         "http_headers": {
