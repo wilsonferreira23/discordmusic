@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+import yt_dlp
 import asyncio
 import os
 import logging
@@ -21,15 +22,11 @@ logger = logging.getLogger("music_bot")
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
-POT_PROVIDER_URL = os.environ.get("POT_PROVIDER_URL")
+
+COOKIE_FILE = "cookies.txt"
 
 if not DISCORD_TOKEN:
     raise RuntimeError("DISCORD_TOKEN não foi encontrado nas variáveis de ambiente.")
-
-if not POT_PROVIDER_URL:
-    os.environ["YTDLP_NO_PLUGINS"] = "1"
-
-import yt_dlp
 
 # =========================
 # SPOTIFY
@@ -84,20 +81,11 @@ def get_ydl_opts():
         },
     }
 
-    if POT_PROVIDER_URL:
-        opts["plugin_dirs"] = ["default"]
-        opts["extractor_args"] = {
-            "youtube": {
-                "player_client": ["mweb"],
-            },
-            "youtubepot-bgutilhttp": {
-                "base_url": [POT_PROVIDER_URL],
-            },
-        }
-        logger.info("Usando provedor de PO Token em %s.", POT_PROVIDER_URL)
+    if os.path.exists(COOKIE_FILE):
+        opts["cookiefile"] = COOKIE_FILE
+        logger.info("Usando cookies.txt no yt-dlp.")
     else:
-        opts["plugin_dirs"] = []
-        logger.info("Provedor de PO Token não configurado; usando clientes públicos padrão.")
+        logger.warning("cookies.txt não encontrado. Rodando sem cookies.")
 
     return opts
 
